@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, ScrollView, Alert } from 'react-native';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, ScrollView, Alert, Modal } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function App() {
@@ -24,10 +24,24 @@ export default function App() {
     liquido: 0,
     aportacionEmpresa: 0
   });
+  
+  // Nuevos estados para el registro de horarios
+  const [registrosHorarios, setRegistrosHorarios] = useState([]);
+  const [modalRegistroVisible, setModalRegistroVisible] = useState(false);
+  const [fechaSeleccionada, setFechaSeleccionada] = useState(new Date());
+  const [horaEntrada, setHoraEntrada] = useState('');
+  const [horaSalida, setHoraSalida] = useState('');
+  const [descanso, setDescanso] = useState('');
+  const [esHoraExtra, setEsHoraExtra] = useState(false);
+  const [esNocturna, setEsNocturna] = useState(false);
+  const [mesActual, setMesActual] = useState(new Date().getMonth());
+  const [anoActual, setAnoActual] = useState(new Date().getFullYear());
+  const [modalCalendarioVisible, setModalCalendarioVisible] = useState(false);
 
   // Cargar datos guardados al inicio
   useEffect(() => {
     cargarDatos();
+    cargarRegistrosHorarios();
   }, []);
 
   // Guardar datos cuando cambian
@@ -35,6 +49,11 @@ export default function App() {
     guardarDatos();
   }, [horasNormales, precioHoraNormal, horasComplementarias, precioHoraComplementaria, 
      horasNocturnas, precioHoraNocturna, complementos]);
+
+  // Guardar registros horarios cuando cambian
+  useEffect(() => {
+    guardarRegistrosHorarios();
+  }, [registrosHorarios]);
 
   // Calcular total cuando cambian los valores
   useEffect(() => {
@@ -74,6 +93,25 @@ export default function App() {
       }
     } catch (error) {
       Alert.alert('Error', 'No se pudieron cargar los datos');
+    }
+  };
+
+  const guardarRegistrosHorarios = async () => {
+    try {
+      await AsyncStorage.setItem('registrosHorarios', JSON.stringify(registrosHorarios));
+    } catch (error) {
+      Alert.alert('Error', 'No se pudieron guardar los registros horarios');
+    }
+  };
+
+  const cargarRegistrosHorarios = async () => {
+    try {
+      const registrosGuardados = await AsyncStorage.getItem('registrosHorarios');
+      if (registrosGuardados) {
+        setRegistrosHorarios(JSON.parse(registrosGuardados));
+      }
+    } catch (error) {
+      Alert.alert('Error', 'No se pudieron cargar los registros horarios');
     }
   };
 
@@ -189,6 +227,143 @@ export default function App() {
     setComplementos(complementos.filter(comp => comp.id !== id));
   };
 
+  const calcularHorasTrabajadas = () => {
+    if (!horaEntrada || !horaSalida) return 0;
+
+    const [horaEntradaHora, horaEntradaMinuto] = horaEntrada.split(':').map(num => parseInt(num, 10));
+    const [horaSalidaHora, horaSalidaMinuto] = horaSalida.split(':').map(num => parseInt(num, 10));
+    
+    let minutosEntrada = horaEntradaHora * 60 + horaEntradaMinuto;
+    let minutosSalida = horaSalidaHora * 60 + horaSalidaMinuto;
+    
+    // Si la salida es del día siguiente
+    if (minutosSalida < minutosEntrada) {
+      minutosSalida += 24 * 60;
+    }
+    
+    // Restar el descanso si existe
+    const minutosDescanso = descanso ? parseInt(descanso, 10) : 0;
+    
+    const minutosTrabajados = minutosSalida - minutosEntrada - minutosDescanso;
+    return (minutosTrabajados / 60).toFixed(2);
+  };
+
+  const agregarRegistroHorario = () => {
+    if (!horaEntrada || !horaSalida) {
+      Alert.alert('Error', 'Debes introducir hora de entrada y salida');
+      return;
+    }
+
+    const horasTrabajadas = calcularHorasTrabajadas();
+    
+    const nuevoRegistro = {
+      id: Date.now().toString(),
+      fecha: fechaSeleccionada.toISOString(),
+      horaEntrada,
+      horaSalida,
+      descanso: descanso || '0',
+      horasTrabajadas,
+      esHoraExtra,
+      esNocturna
+    };
+    
+    setRegistrosHorarios([...registrosHorarios, nuevoRegistro]);
+    
+    // Actualizar los totales automáticamente - Corregido para evitar error de toString()
+    if (esHoraExtra) {
+      const valorActual = parseFloat(horasComplementarias) || 0;
+      const nuevoValor = valorActual + parseFloat(horasTrabajadas);
+      setHorasComplementarias(nuevoValor.toString());
+    } else if (esNocturna) {
+      const valorActual = parseFloat(horasNocturnas) || 0;
+      const nuevoValor = valorActual + parseFloat(horasTrabajadas);
+      setHorasNocturnas(nuevoValor.toString());
+    } else {
+      const valorActual = parseFloat(horasNormales) || 0;
+      const nuevoValor = valorActual + parseFloat(horasTrabajadas);
+      setHorasNormales(nuevoValor.toString());
+    }
+    
+    setModalRegistroVisible(false);
+    limpiarFormularioRegistro();
+  };
+
+  const limpiarFormularioRegistro = () => {
+    setHoraEntrada('');
+    setHoraSalida('');
+    setDescanso('');
+    setEsHoraExtra(false);
+    setEsNocturna(false);
+  };
+
+  const eliminarRegistroHorario = (id) => {
+    const registro = registrosHorarios.find(reg => reg.id === id);
+    if (registro) {
+      // Restar las horas del total correspondiente - Corregido para evitar error de toString()
+      if (registro.esHoraExtra) {
+        const valorActual = parseFloat(horasComplementarias) || 0;
+        const nuevoValor = valorActual - parseFloat(registro.horasTrabajadas);
+        setHorasComplementarias(nuevoValor.toString());
+      } else if (registro.esNocturna) {
+        const valorActual = parseFloat(horasNocturnas) || 0;
+        const nuevoValor = valorActual - parseFloat(registro.horasTrabajadas);
+        setHorasNocturnas(nuevoValor.toString());
+      } else {
+        const valorActual = parseFloat(horasNormales) || 0;
+        const nuevoValor = valorActual - parseFloat(registro.horasTrabajadas);
+        setHorasNormales(nuevoValor.toString());
+      }
+    }
+    
+    setRegistrosHorarios(registrosHorarios.filter(reg => reg.id !== id));
+  };
+
+  const seleccionarDia = (dia) => {
+    const nuevaFecha = new Date(anoActual, mesActual, dia);
+    setFechaSeleccionada(nuevaFecha);
+    setModalCalendarioVisible(false);
+    setModalRegistroVisible(true);
+  };
+
+  const cambiarMes = (incremento) => {
+    let nuevoMes = mesActual + incremento;
+    let nuevoAno = anoActual;
+    
+    if (nuevoMes > 11) {
+      nuevoMes = 0;
+      nuevoAno += 1;
+    } else if (nuevoMes < 0) {
+      nuevoMes = 11;
+      nuevoAno -= 1;
+    }
+    
+    setMesActual(nuevoMes);
+    setAnoActual(nuevoAno);
+  };
+
+  const obtenerNombreMes = (mes) => {
+    const meses = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    return meses[mes];
+  };
+
+  const generarDiasDelMes = () => {
+    const ultimoDia = new Date(anoActual, mesActual + 1, 0).getDate();
+    const dias = [];
+    
+    for (let i = 1; i <= ultimoDia; i++) {
+      dias.push(i);
+    }
+    
+    return dias;
+  };
+
+  const filtrarRegistrosPorMes = () => {
+    return registrosHorarios.filter(registro => {
+      const fecha = new Date(registro.fecha);
+      return fecha.getMonth() === mesActual && fecha.getFullYear() === anoActual;
+    });
+  };
+
   const toggleDetalleNomina = () => {
     setMostrarDetalleNomina(!mostrarDetalleNomina);
   };
@@ -197,6 +372,45 @@ export default function App() {
     <ScrollView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Calculadora de Nómina</Text>
+      </View>
+      
+      {/* Sección de Registro de Horarios */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Registro de Horarios</Text>
+        <TouchableOpacity style={styles.button} onPress={() => setModalCalendarioVisible(true)}>
+          <Text style={styles.buttonText}>Añadir Horario</Text>
+        </TouchableOpacity>
+        
+        {filtrarRegistrosPorMes().length > 0 && (
+          <View style={styles.registrosContainer}>
+            <Text style={styles.registrosTitle}>Horarios de {obtenerNombreMes(mesActual)} {anoActual}:</Text>
+            {filtrarRegistrosPorMes().map(registro => {
+              const fecha = new Date(registro.fecha);
+              return (
+                <View key={registro.id} style={styles.registroItem}>
+                  <View style={styles.registroInfo}>
+                    <Text style={styles.registroFecha}>{fecha.getDate()} de {obtenerNombreMes(fecha.getMonth())}</Text>
+                    <Text style={styles.registroHorario}>
+                      {registro.horaEntrada} - {registro.horaSalida} 
+                      {registro.descanso !== '0' ? ` (Descanso: ${registro.descanso} min)` : ''}
+                    </Text>
+                    <Text style={styles.registroHoras}>
+                      {registro.horasTrabajadas} horas
+                      {registro.esHoraExtra ? ' (Extra)' : ''}
+                      {registro.esNocturna ? ' (Nocturna)' : ''}
+                    </Text>
+                  </View>
+                  <TouchableOpacity 
+                    style={styles.deleteButton} 
+                    onPress={() => eliminarRegistroHorario(registro.id)}
+                  >
+                    <Text style={styles.deleteButtonText}>X</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+          </View>
+        )}
       </View>
       
       <View style={styles.section}>
@@ -403,6 +617,137 @@ export default function App() {
           </View>
         </View>
       )}
+      
+      {/* Modal de selección de calendario */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={modalCalendarioVisible}
+        onRequestClose={() => setModalCalendarioVisible(false)}
+      >
+        <View style={styles.centeredView}>
+          <View style={styles.modalView}>
+            <Text style={styles.modalTitle}>Selecciona una fecha</Text>
+            
+            <View style={styles.calendarHeader}>
+              <TouchableOpacity onPress={() => cambiarMes(-1)}>
+                <Text style={styles.calendarNavButton}>{'<'}</Text>
+              </TouchableOpacity>
+              <Text style={styles.calendarTitle}>{obtenerNombreMes(mesActual)} {anoActual}</Text>
+              <TouchableOpacity onPress={() => cambiarMes(1)}>
+                <Text style={styles.calendarNavButton}>{'>'}</Text>
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.calendarDays}>
+              {generarDiasDelMes().map(dia => (
+                <TouchableOpacity 
+                  key={dia} 
+                  style={styles.calendarDay}
+                  onPress={() => seleccionarDia(dia)}
+                >
+                  <Text style={styles.calendarDayText}>{dia}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            
+            <TouchableOpacity
+              style={styles.button}
+              onPress={() => setModalCalendarioVisible(false)}
+            >
+              <Text style={styles.buttonText}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      
+      {/* Modal de registro de horario */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={modalRegistroVisible}
+        onRequestClose={() => setModalRegistroVisible(false)}
+      >
+        <View style={styles.centeredView}>
+          <View style={styles.modalView}>
+            <Text style={styles.modalTitle}>
+              Registro para el {fechaSeleccionada.getDate()} de {obtenerNombreMes(fechaSeleccionada.getMonth())}
+            </Text>
+            
+            <View style={styles.modalInputRow}>
+              <Text style={styles.modalInputLabel}>Hora de entrada:</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="HH:MM"
+                value={horaEntrada}
+                onChangeText={setHoraEntrada}
+                keyboardType="numbers-and-punctuation"
+              />
+            </View>
+            
+            <View style={styles.modalInputRow}>
+              <Text style={styles.modalInputLabel}>Hora de salida:</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="HH:MM"
+                value={horaSalida}
+                onChangeText={setHoraSalida}
+                keyboardType="numbers-and-punctuation"
+              />
+            </View>
+            
+            <View style={styles.modalInputRow}>
+              <Text style={styles.modalInputLabel}>Descanso (minutos):</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="0"
+                value={descanso}
+                onChangeText={setDescanso}
+                keyboardType="numeric"
+              />
+            </View>
+            
+            {horaEntrada && horaSalida && (
+              <View style={styles.horasCalculadas}>
+                <Text style={styles.horasCalculadasLabel}>Horas totales:</Text>
+                <Text style={styles.horasCalculadasValue}>{calcularHorasTrabajadas()} h</Text>
+              </View>
+            )}
+            
+            <View style={styles.checkboxRow}>
+              <TouchableOpacity 
+                style={[styles.checkbox, esHoraExtra && styles.checkboxChecked]} 
+                onPress={() => setEsHoraExtra(!esHoraExtra)}
+              />
+              <Text style={styles.checkboxLabel}>Es hora extra</Text>
+            </View>
+            
+            <View style={styles.checkboxRow}>
+              <TouchableOpacity 
+                style={[styles.checkbox, esNocturna && styles.checkboxChecked]} 
+                onPress={() => setEsNocturna(!esNocturna)}
+              />
+              <Text style={styles.checkboxLabel}>Es hora nocturna</Text>
+            </View>
+            
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.button, styles.buttonCancel]}
+                onPress={() => setModalRegistroVisible(false)}
+              >
+                <Text style={styles.buttonText}>Cancelar</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[styles.button, styles.buttonSave]}
+                onPress={agregarRegistroHorario}
+              >
+                <Text style={styles.buttonText}>Guardar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
       
       <StatusBar style="auto" />
     </ScrollView>
@@ -645,5 +990,168 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#fff',
     textAlign: 'center',
-  }
+  },
+  registrosContainer: {
+    marginTop: 15,
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+    paddingTop: 10,
+  },
+  registrosTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  registroItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  registroInfo: {
+    flex: 1,
+  },
+  registroFecha: {
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  registroHorario: {
+    fontSize: 14,
+    color: '#666',
+  },
+  registroHoras: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  centeredView: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalView: {
+    width: '90%',
+    maxHeight: '80%',
+    backgroundColor: 'white',
+    borderRadius: 10,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 15,
+    textAlign: 'center',
+  },
+  calendarHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  calendarTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  calendarNavButton: {
+    fontSize: 24,
+    padding: 5,
+  },
+  calendarDays: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+  calendarDay: {
+    width: '13%',
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 10,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 5,
+  },
+  calendarDayText: {
+    fontSize: 16,
+  },
+  modalInputRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  modalInputLabel: {
+    fontSize: 16,
+    width: '40%',
+  },
+  modalInput: {
+    width: '60%',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 16,
+  },
+  horasCalculadas: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginVertical: 15,
+    paddingVertical: 10,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 5,
+    paddingHorizontal: 10,
+  },
+  horasCalculadasLabel: {
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  horasCalculadasValue: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+  },
+  checkboxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 3,
+    marginRight: 10,
+  },
+  checkboxChecked: {
+    backgroundColor: '#3498db',
+  },
+  checkboxLabel: {
+    fontSize: 16,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 20,
+  },
+  buttonCancel: {
+    backgroundColor: '#e74c3c',
+    width: '48%',
+  },
+  buttonSave: {
+    backgroundColor: '#2ecc71',
+    width: '48%',
+  },
 });
